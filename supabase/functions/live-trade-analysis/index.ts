@@ -46,13 +46,42 @@ interface TimeframeData {
   lastCandles: { open: number; high: number; low: number; close: number; volume: number }[];
 }
 
+
+function summarizeGroup(label: string, data: TimeframeData[]) {
+  if (!data.length) return `${label}: No timeframe data available`;
+
+  const avgRsi = data.reduce((sum, tf) => sum + tf.rsi, 0) / data.length;
+  const avgMacd = data.reduce((sum, tf) => sum + tf.macd, 0) / data.length;
+  const trendCount = data.reduce((acc, tf) => {
+    acc[tf.trend] = (acc[tf.trend] || 0) + 1;
+    return acc;
+  }, { up: 0, down: 0, sideways: 0 } as Record<'up' | 'down' | 'sideways', number>);
+
+  const dominantTrend = (Object.entries(trendCount).sort((a, b) => b[1] - a[1])[0]?.[0] || 'sideways').toUpperCase();
+  const tfLines = data
+    .map((tf) => `${tf.tf}: trend=${tf.trend.toUpperCase()}, RSI=${tf.rsi.toFixed(1)}, MACD=${tf.macd.toFixed(4)}, EMA20=${tf.ema20.toFixed(4)}, EMA50=${tf.ema50.toFixed(4)}`)
+    .join(' | ');
+
+  return `${label} Summary -> Dominant Trend: ${dominantTrend}; Avg RSI: ${avgRsi.toFixed(1)}; Avg MACD: ${avgMacd.toFixed(4)}; Details: ${tfLines}`;
+}
+
 // =====================================================
 // Default Prompt (used as fallback if DB prompt not found)
 // =====================================================
-const FALLBACK_PROMPT = `You are an elite crypto trading analyst specializing in active trade management. 
-Analyze an OPEN trade across multiple timeframes and provide precise, actionable advice.
+const FALLBACK_PROMPT = `You are an elite crypto trading analyst specializing in multi-timeframe trade management for active positions.
 
-IMPORTANT: Respond in valid JSON only. No markdown. No code blocks.
+Your core task:
+1) Judge if the CURRENT trade is still valid or invalid.
+2) Read short timeframes (1m,5m,15m,30m) for immediate momentum and execution risk.
+3) Read long timeframes (1h,4h,1d) for structure and trend alignment.
+4) Give practical action: hold, partial exit, full exit, or add only when risk/reward clearly improves.
+
+IMPORTANT RULES:
+- Respond in valid JSON only. No markdown. No code blocks.
+- Be strict and risk-aware. If short and long timeframes conflict, reduce confidence and highlight risk.
+- Mention concrete timeframe behavior in outlooks (e.g. "1m/5m weak, 1h/4h still bullish").
+- Recommendation must clearly say whether trade is good to keep now, and what to do next.
+- slSuggestion/tpSuggestion must be realistic relative to current price and trade direction.
 
 Response format:
 {
@@ -60,18 +89,18 @@ Response format:
   "urgency": "HIGH" | "MEDIUM" | "LOW",
   "confidence": number (1-100),
   "currentBias": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "shortTermOutlook": "string (what 1m-30m shows)",
-  "longTermOutlook": "string (what 1h-1d shows)",
-  "recommendation": "string (specific actionable advice in 2-3 sentences)",
+  "shortTermOutlook": "string (explicitly summarize 1m-30m)",
+  "longTermOutlook": "string (explicitly summarize 1h-1d)",
+  "recommendation": "string (2-4 concise sentences: trade validity + exact action + risk note)",
   "riskLevel": "HIGH" | "MEDIUM" | "LOW",
-  "slSuggestion": number | null (suggested stop loss price, null if current is fine),
-  "tpSuggestion": number | null (suggested take profit price, null if current is fine),
+  "slSuggestion": number | null,
+  "tpSuggestion": number | null,
   "keyLevels": {
     "support": number,
     "resistance": number
   },
-  "reasons": ["string", "string", "string"] (3 key reasons for the decision),
-  "warning": "string | null" (critical risk warning if any)
+  "reasons": ["string", "string", "string"],
+  "warning": "string | null"
 }`;
 
 // =====================================================
@@ -98,9 +127,19 @@ serve(async (req) => {
       : ((entryPrice - currentPrice) / entryPrice) * 100;
 
     // Build timeframe summary
-    const tfSummary = (timeframeData as TimeframeData[])
+    const tfData = (timeframeData as TimeframeData[]) || [];
+    const shortTfs = new Set(['1m', '5m', '15m', '30m']);
+    const longTfs = new Set(['1h', '4h', '1d']);
+
+    const shortData = tfData.filter((tf) => shortTfs.has(tf.tf));
+    const longData = tfData.filter((tf) => longTfs.has(tf.tf));
+
+    const tfSummary = tfData
       .map(tf => `[${tf.tf}] Price: $${tf.currentPrice.toFixed(4)} | RSI: ${tf.rsi.toFixed(1)} | MACD: ${tf.macd > 0 ? '+' : ''}${tf.macd.toFixed(4)} | EMA20: $${tf.ema20.toFixed(4)} | EMA50: $${tf.ema50.toFixed(4)} | Trend: ${tf.trend.toUpperCase()}`)
       .join('\n');
+
+    const shortSummary = summarizeGroup('Short TF (1m-30m)', shortData);
+    const longSummary = summarizeGroup('Long TF (1h-1d)', longData);
 
     const userPrompt = `Active Trade Analysis Request:
 
@@ -113,12 +152,19 @@ ${stopLoss ? `Stop Loss: $${stopLoss}` : 'Stop Loss: Not set'}
 ${takeProfit ? `Take Profit: $${takeProfit}` : 'Take Profit: Not set'}
 Quantity: ${quantity}
 
-Multi-Timeframe Analysis:
+Full Multi-Timeframe Data:
 ${tfSummary}
 
-Short timeframes (1m-30m) show immediate momentum.
-Long timeframes (1h-1d) show macro trend.
-Provide your decision on whether to hold, exit, or adjust this ${side} trade.`;
+Grouped Read:
+${shortSummary}
+${longSummary}
+
+Decision Checklist:
+- First say if this trade is still valid NOW.
+- Use short TFs to judge immediate continuation/reversal risk.
+- Use long TFs to judge macro alignment and trade quality.
+- If conflict exists between short and long TFs, lower confidence and mention exact conflict.
+- Give clear action with risk management (HOLD, EXIT_PARTIAL, EXIT_NOW, ADD_POSITION).`;
 
     // Call AI Gateway
     const response = await fetch(AI_GATEWAY_URL, {
