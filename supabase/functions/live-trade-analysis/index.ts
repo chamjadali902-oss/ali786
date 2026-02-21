@@ -81,6 +81,7 @@ IMPORTANT RULES:
 - Be strict and risk-aware. If short and long timeframes conflict, reduce confidence and highlight risk.
 - Mention concrete timeframe behavior in outlooks (e.g. "1m/5m weak, 1h/4h still bullish").
 - Recommendation must clearly say whether trade is good to keep now, and what to do next.
+- Always include a `situations` array with short-term, long-term, and alignment situations.
 - slSuggestion/tpSuggestion must be realistic relative to current price and trade direction.
 
 Response format:
@@ -100,7 +101,12 @@ Response format:
     "resistance": number
   },
   "reasons": ["string", "string", "string"],
-  "warning": "string | null"
+  "warning": "string | null",
+  "situations": [
+    { "title": "Short-term momentum", "status": "BULLISH" | "BEARISH" | "MIXED" | "NEUTRAL", "detail": "string" },
+    { "title": "Long-term structure", "status": "BULLISH" | "BEARISH" | "MIXED" | "NEUTRAL", "detail": "string" },
+    { "title": "Timeframe alignment", "status": "BULLISH" | "BEARISH" | "MIXED" | "NEUTRAL", "detail": "string" }
+  ]
 }`;
 
 // =====================================================
@@ -212,7 +218,33 @@ Decision Checklist:
         keyLevels: { support: currentPrice * 0.98, resistance: currentPrice * 1.02 },
         reasons: ["Analysis parsing failed"],
         warning: null,
+        situations: [
+          { title: "Short-term momentum", status: "NEUTRAL", detail: "AI response could not be parsed." },
+          { title: "Long-term structure", status: "NEUTRAL", detail: "AI response could not be parsed." },
+          { title: "Timeframe alignment", status: "MIXED", detail: "Unable to verify short vs long timeframe agreement." },
+        ],
       };
+    }
+
+    const normalizedSituations = Array.isArray(analysis?.situations)
+      ? analysis.situations
+          .filter((item: any) => item?.title && item?.detail)
+          .slice(0, 4)
+          .map((item: any) => ({
+            title: String(item.title),
+            status: ["BULLISH", "BEARISH", "MIXED", "NEUTRAL"].includes(item.status) ? item.status : "NEUTRAL",
+            detail: String(item.detail),
+          }))
+      : [];
+
+    if (!normalizedSituations.length) {
+      analysis.situations = [
+        { title: "Short-term momentum", status: "NEUTRAL", detail: String(analysis.shortTermOutlook || "No short timeframe insight.") },
+        { title: "Long-term structure", status: "NEUTRAL", detail: String(analysis.longTermOutlook || "No long timeframe insight.") },
+        { title: "Timeframe alignment", status: "MIXED", detail: "Short and long timeframe alignment was not explicitly provided." },
+      ];
+    } else {
+      analysis.situations = normalizedSituations;
     }
 
     return new Response(JSON.stringify(analysis), {

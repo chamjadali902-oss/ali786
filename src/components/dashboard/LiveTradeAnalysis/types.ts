@@ -9,6 +9,13 @@ export interface TFData {
   lastCandles: { open: number; high: number; low: number; close: number; volume: number }[];
 }
 
+
+export interface TimeframeSituation {
+  title: string;
+  status: 'BULLISH' | 'BEARISH' | 'MIXED' | 'NEUTRAL';
+  detail: string;
+}
+
 export interface Analysis {
   decision: string;
   urgency: string;
@@ -23,6 +30,7 @@ export interface Analysis {
   keyLevels: { support: number; resistance: number };
   reasons: string[];
   warning: string | null;
+  situations?: TimeframeSituation[];
 }
 
 export const DECISION_COLOR: Record<string, string> = {
